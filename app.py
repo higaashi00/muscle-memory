@@ -5,6 +5,24 @@ from datetime import datetime, date
 from datetime import datetime,date,timedelta
 from streamlit_calendar import calendar
 
+if not st.user.is_logged_in:
+    st.info("筋トレ記録アプリへようこそ！まずはログインしてくれ！")
+    # ログインボタンを表示して、ここで画面の読み込みをストップさせる
+    st.login("google") 
+    st.stop()
+
+# 💡 ここから下は、ログインに成功した人だけが見れる世界
+# ログインしたGoogleアカウントのメールアドレスをユーザー名として使う
+current_user = st.user.email 
+
+st.sidebar.header("👤 ユーザー情報")
+st.sidebar.info(f"ログイン中: {current_user}")
+if st.sidebar.button("ログアウト"):
+    st.logout()
+
+# ユーザー（メアド）ごとに保存するCSVファイルを自動で分ける
+file_path = f'workout_log_{current_user}.csv'
+
 st.title('筋トレ記録')
 
 st.subheader("📅 トレーニング日を選択")
