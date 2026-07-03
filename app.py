@@ -2,32 +2,46 @@ import streamlit as st
 import pandas as pd
 import os
 from datetime import datetime, date
+from datetime import datetime,date,timedelta
 from streamlit_calendar import calendar
 
 st.title('筋トレ記録')
 
 st.subheader("📅 トレーニング日を選択")
 
-# カレンダーの設定
+# カレンダーの設定（セッションステートで日付を記憶）
+if 'selected_date' not in st.session_state:
+    st.session_state.selected_date = str(date.today())
+
+# カレンダーのオプション設定
 calendar_options = {
     "initialView": "dayGridMonth",
-    "selectable": True, # 日付を選択可能にする
+    "selectable": True,
 }
 
-# 選択された日付を保持するメモリ（初期値は今日）
-if "selected_date" not in st.session_state:
-    st.session_state.selected_date = date.today().strftime("%Y-%m-%d")
+# カレンダーを表示し、ユーザーの操作（イベント）を受け取る
+cal_result = calendar(events=[], options=calendar_options)
 
-# 画面にカレンダーを表示して、クリックされた情報を受け取る
-state = calendar(options=calendar_options, key="workout_calendar")
+# カレンダーの日付がクリックされたら、記憶している日付を上書きする
+if "dateClick" in cal_result:
+    raw_date = str(cal_result["dateClick"]["date"])
+    
+    # 💡 修正ポイント2：'T'が含まれている（世界標準時）なら日本時間に変換！
+    if "T" in raw_date:
+        # "Z"を取り除いてPythonの日付データに変換し、9時間（日本時間分）足す
+        dt_utc = datetime.fromisoformat(raw_date.replace("Z", ""))
+        dt_jst = dt_utc + timedelta(hours=9)
+        clicked_date = dt_jst.strftime("%Y-%m-%d") # "YYYY-MM-DD"の形に戻す
+    else:
+        # もし時間がついていない形式なら、そのまま使う
+        clicked_date = raw_date
+    
+    if st.session_state.selected_date != clicked_date:
+        st.session_state.selected_date = clicked_date
+        st.rerun() # 日付が変わったら画面を即座に更新！
 
-# もしカレンダーの日付がクリックされたら、その日付をメモリに保存する
-if state and "selectInfo" in state:
-    st.session_state.selected_date = state["selectInfo"]["start"][0:10]
-
-# いま選択されている日付を取得
-target_date_str = st.session_state.selected_date
-st.info(f"👉 現在選択中の日付: **{target_date_str}**")
+# 動作確認用：今選んでいる日付を表示
+st.write(f"現在選択中の日付: {st.session_state.selected_date}")
 
 exercises = {
     '胸': ['ベンチプレス', 'ダンベルプレス', 'インクライン・ベンチプレス', 'チェストプレス', 'ペックデック / バタフライ', 'ケーブルクロスオーバー', 'ディップス', 'ダンベルフライ', 'スミスマシン・ベンチプレス', 'ダンベル・プルオーバー'],
@@ -45,13 +59,11 @@ tab_record, tab_history = st.tabs(["✍️ 記録する", "🔍 履歴を見る"
 # タブ1：記録する画面
 # ---------------------------------
 with tab_record:
-    # ⚠️ 修正ポイント1：ここのインデント（字下げ）を揃えないとタブの中にフォームが入らないから直しておいたぞ！
     category = st.selectbox('部位', ['胸', '腕', '肩', '背中'])
     selected_exercise = st.selectbox('種目', exercises[category])
 
     st.write("---")
 
-    # お前のこだわり設定（max_value=20）！
     num_sets = st.number_input("セット数", min_value=1, max_value=20, value=4, step=1)
 
     set_data = []
@@ -62,9 +74,9 @@ with tab_record:
         for i in range(int(num_sets)):
             with cols[i]:
                 st.markdown(f"**[{i+1}セット]**")
-                # お前のこだわり設定（step=0.5）！
-                w = st.number_input('重量(kg)', min_value=0.0, step=0.5, key=f"weight_{i}")
-                r = st.number_input('回数(rep)', min_value=0, step=1, key=f"reps_{i}")
+                # 💡 value=None を追加して、最初から空っぽの状態にする！
+                w = st.number_input('重量', min_value=0.0, step=0.5, value=None, placeholder="kg", key=f"weight_{i}")
+                r = st.number_input('回数', min_value=0, step=1, value=None, placeholder="rep", key=f"reps_{i}")
 
                 set_data.append({"セット": i+1, "重量(kg)": w, "rep": r})
         
@@ -74,39 +86,93 @@ with tab_record:
     if submit_button:
         save_data = []
         for row in set_data:
+            # 💡 空欄のまま保存ボタンを押された時のエラー対策（Noneなら0として扱う）
+            final_w = row["重量(kg)"] if row["重量(kg)"] is not None else 0.0
+            final_r = row["rep"] if row["rep"] is not None else 0
+            
+            # 重量も回数も0なら、そのセットはスキップする（不要な空データを保存しない）
+            if final_w == 0.0 and final_r == 0:
+                continue
+                
             save_data.append({
-                "日付": target_date_str, # ⚠️ 修正ポイント2：カレンダーでタップした日付がここに入る！
+                "日付": st.session_state.selected_date,
                 "部位": category,
                 "種目": selected_exercise,
                 "セット": row["セット"],
-                "重量(kg)": row["重量(kg)"],
-                "rep": row["rep"],
+                "重量(kg)": final_w,
+                "rep": final_r,
             })
-        df = pd.DataFrame(save_data)
+            
+        if len(save_data) > 0:
+            df = pd.DataFrame(save_data)
 
-        if not os.path.exists(file_path):
-            df.to_csv(file_path, mode='w', header=True, index=False, encoding='utf-8-sig')
+            if not os.path.exists(file_path):
+                df.to_csv(file_path, mode='w', header=True, index=False, encoding='utf-8-sig')
+            else:
+                df.to_csv(file_path, mode='a', header=False, index=False, encoding='utf-8-sig')
+
+            st.success(f'よし！【{category}】{selected_exercise} を {st.session_state.selected_date} の記録として保存したぜ！')
         else:
-            df.to_csv(file_path, mode='a', header=False, index=False, encoding='utf-8-sig')
-
-        st.success(f'よし！【{category}】{selected_exercise} を {target_date_str} の記録として保存したぜ！')
-
-# ---------------------------------
+            st.warning('入力されたデータがなかったから保存をキャンセルしたぞ！')
+            # ---------------------------------
 # タブ2：履歴を見る画面
 # ---------------------------------
 with tab_history:
     st.subheader("トレーニング記録")
 
-    if os.path.exists(file_path):
+    if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
         df_history = pd.read_csv(file_path)
-
-        # ⚠️ 修正ポイント3：履歴も「カレンダーで選んだ日付」が自動で表示されるように連動させたぞ！
-        daily_data = df_history[df_history["日付"] == target_date_str]
+        daily_data = df_history[df_history["日付"] == st.session_state.selected_date]
 
         if not daily_data.empty:
-            st.write(f"**{target_date_str} のトレーニング内容:**")
-            st.dataframe(daily_data.drop(columns=["日付"]))
+            st.write(f"**{st.session_state.selected_date} のトレーニング内容:**")
+            
+            for exercise_name, group_df in daily_data.groupby('種目'):
+                st.markdown(f"### 🏋️ {exercise_name}")
+                
+                edit_exercise = st.toggle("この種目を編集・セット追加", key=f"toggle_{exercise_name}")
+                
+                if edit_exercise:
+                    # 💡 column_config を追加して、スマホに「これは数字だ（テンキーを出せ）」と指示する！
+                    edited_group_df = st.data_editor(
+                        group_df[['セット', '重量(kg)', 'rep']],
+                        num_rows="dynamic",
+                        key=f"editor_{exercise_name}",
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "重量(kg)": st.column_config.NumberColumn(
+                                "重量(kg)",
+                                min_value=0.0,
+                                step=0.5,
+                                format="%.1f"
+                            ),
+                            "rep": st.column_config.NumberColumn(
+                                "rep",
+                                min_value=0,
+                                step=1,
+                                format="%d"
+                            )
+                        }
+                    )
+                    
+                    if st.button(f"💾 {exercise_name} の変更を保存", key=f"save_{exercise_name}"):
+                        edited_group_df['日付'] = st.session_state.selected_date
+                        edited_group_df['部位'] = group_df['部位'].iloc[0]
+                        edited_group_df['種目'] = exercise_name
+                        
+                        df_history_kept = df_history[~((df_history["日付"] == st.session_state.selected_date) & (df_history["種目"] == exercise_name))]
+                        updated_df = pd.concat([df_history_kept, edited_group_df], ignore_index=True)
+                        
+                        updated_df.to_csv(file_path, index=False, encoding='utf-8-sig')
+                        st.success(f"よし！{exercise_name} の記録を更新したぜ！")
+                        st.rerun()
+                
+                else:
+                    display_df = group_df[['セット', '重量(kg)', 'rep']]
+                    st.dataframe(display_df, hide_index=True, use_container_width=True)
+                    st.write("")
         else:
-            st.info(f"{target_date_str} の記録はありません")
+            st.info(f"{st.session_state.selected_date} の記録はないぜ！")
     else:
-        st.warning("記録は一つもありません")
+        st.warning("まだ記録が一つもないみたいだ。さっそく記録してみよう！")
